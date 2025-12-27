@@ -19,11 +19,15 @@ class ActorNetwork(nn.Module):
      - mod_head -> logits length n_mod
     """
     def __init__(self, alpha, input_dims, fc1_dims, fc2_dims, n_agents, n_actions,
-                 name, agent_label, B, n_mod, chkpt_dir='tmp/ddpg'):
+                 name, agent_label, B, n_mod, P_max, chkpt_dir='tmp/ddpg'):
         super(ActorNetwork, self).__init__()
         self.input_dims = input_dims
         self.fc1_dims = fc1_dims
         self.fc2_dims = fc2_dims
+
+        self.B = B
+        self.n_mod = n_mod
+        self.P_max = P_max
 
         # naming / checkpoint
         self.name = name + '_' + str(agent_label)
@@ -41,7 +45,7 @@ class ActorNetwork(nn.Module):
         self.mask_head = nn.Linear(self.fc2_dims, B)
         self.power_head = nn.Linear(self.fc2_dims, B)
         self.cr_head = nn.Linear(self.fc2_dims, 1)
-        self.mod_head = nn.Linear(self.fc2_dims, n_mod)
+        self.mod_head = nn.Linear(self.fc2_dims, B * n_mod)
 
         
         f1 = 1. / np.sqrt(self.fc1.weight.data.size()[0])
@@ -81,9 +85,11 @@ class ActorNetwork(nn.Module):
         x = self.bn2(x)
         x = F.relu(x)
         mask = T.sigmoid(self.mask_head(x))            # [0,1]
-        power_raw = F.softplus(self.power_head(x))     # >=0
+        power_raw = T.sigmoid(self.power_head(x)) * self.P_max     # [0,P_max]
         cr_raw = T.sigmoid(self.cr_head(x))            # [0,1]
-        mod_logits = self.mod_head(x)                  # raw logits
+        mod_logits_flat = self.mod_head(x)             # (batch, B*n_mod)
+        mod_logits = mod_logits_flat.view(-1, self.B, self.n_mod)
+
         return {'mask': mask, 'power': power_raw, 'cr': cr_raw, 'mod': mod_logits}
 
     def save_checkpoint(self):
@@ -98,6 +104,12 @@ class ActorNetwork(nn.Module):
            return
         print(f"... loading actor checkpoint from {self.checkpoint_file} ...")
         self.load_state_dict(T.load(self.checkpoint_file, map_location=self.device))
+
+    def save_best(self):
+        checkpoint_file = os.path.join(self.checkpoint_dir, self.name + '_best.pt')
+        print(f"... saving BEST actor to {checkpoint_file} ...")
+        T.save(self.state_dict(), checkpoint_file)
+
 
 
 class CriticNetwork(nn.Module):
@@ -185,3 +197,7 @@ class CriticNetwork(nn.Module):
         print(f"... loading critic checkpoint from {self.checkpoint_file} ...")
         self.load_state_dict(T.load(self.checkpoint_file, map_location=self.device))
 
+    def save_best(self):
+        checkpoint_file = os.path.join(self.checkpoint_dir, self.name + '_best.pt')
+        print(f"... saving BEST critic to {checkpoint_file} ...")
+        T.save(self.state_dict(), checkpoint_file)

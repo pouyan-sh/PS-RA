@@ -17,7 +17,7 @@ class Agent:
         self.n_mod = n_mod
 
         # Action lengths
-        self.action_dim = B + B + 1 + n_mod   # mask(B)+power(B)+cr(1)+mod_logits
+        self.action_dim = B + B + 1 + B * n_mod   # mask(B)+power(B)+cr(1)+mod_logits
 
         # Build actor/critic
         self.actor = ActorNetwork(
@@ -30,7 +30,8 @@ class Agent:
             name='actor',
             agent_label=agent_id,
             B=B,
-            n_mod=n_mod
+            n_mod=n_mod,
+            P_max=cfg.P_max
         )
 
         self.critic = CriticNetwork(
@@ -56,7 +57,8 @@ class Agent:
             name='target_actor',
             agent_label=agent_id,
             B=B,
-            n_mod=n_mod
+            n_mod=n_mod,
+            P_max=cfg.P_max
         )
 
         self.target_critic = CriticNetwork(
@@ -85,10 +87,10 @@ class Agent:
         returns Tensor(B, action_dim)
         """
         return T.cat([
-            action_dict['mask'],
-            action_dict['power'],
-            action_dict['cr'],
-            action_dict['mod']
+            action_dict['mask'],                 # (B)
+            action_dict['power'],                # (B)
+            action_dict['cr'],                   # (1)
+            action_dict['mod'].reshape(action_dict['mod'].shape[0], -1)       # (B*n_mod)
         ], dim=1)
     
 
@@ -126,6 +128,11 @@ class Agent:
         r = reward_l.to(device).unsqueeze(1)
         d = done.to(device).unsqueeze(1)
 
+
+        self.target_actor.eval()
+        self.target_critic.eval()
+
+
         # target critic
         with T.no_grad():
             a_target = self.target_actor(s_)
@@ -134,6 +141,7 @@ class Agent:
             q_next[d.bool()] = 0.0
             target = r + self.cfg.gamma * q_next
 
+        self.critic.train()
         # critic update
         q = self.critic(s, a)
         critic_loss = F.mse_loss(q, target.detach())
@@ -142,14 +150,17 @@ class Agent:
         self.critic.optimizer.step()
 
         # actor update
+        self.actor.train()
         self.actor.optimizer.zero_grad()
         actor_out = self.actor(s)
         a_curr_flat = self.flatten_action(actor_out)
         actor_loss_local = -self.critic(s, a_curr_flat)
-        if global_loss.dim() == 1:
-            global_loss = global_loss.view(-1, 1)
-        combined_loss = actor_loss_local + global_loss
-        actor_loss = combined_loss.mean()
+        # if global_loss.dim() == 1:
+        #     global_loss = global_loss.view(-1, 1)
+        # combined_loss = actor_loss_local + global_loss
+        # actor_loss = combined_loss.mean()
+        actor_loss = T.mean(actor_loss_local) + self.cfg.lambda_loss * T.mean(global_loss)
+
         actor_loss.backward()
         self.actor.optimizer.step()
 

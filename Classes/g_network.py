@@ -100,3 +100,7 @@ class G_CriticNetwork(nn.Module):
         print(f"... loading gcritic checkpoint from {self.checkpoint_file} ...")
         self.load_state_dict(T.load(self.checkpoint_file, map_location=self.device))
 
+    def save_best(self):
+        checkpoint_file = os.path.join(self.checkpoint_dir, self.name + '_best.pt')
+        print(f"... saving BEST gcritic to {checkpoint_file} ...")
+        T.save(self.state_dict(), checkpoint_file)

@@ -74,6 +74,12 @@ class GlobalController:
         # -------------------------------------------------------
         # Compute next joint action (target actors)
         # -------------------------------------------------------
+        for i in range(self.n_agents):
+            agents_list[i].target_actor.eval()
+    
+        self.critic1_target.eval()
+        self.critic2_target.eval()
+
         with T.no_grad():
             action_list = []
             for i in range(self.n_agents):
@@ -86,24 +92,23 @@ class GlobalController:
 
             # Policy smoothing
             # n_mod = len(self.agents_networks[0].cfg.modulations)
-            action_dim_per_agent = self.n_actions               # = mask(B)+power(B)+cr+mod_logits
-            n_mod = len(self.cfg.modulations)
-            B_agent = (action_dim_per_agent - 1 - n_mod) // 2
+            B_agent = agents_list[0].B
+            n_mod = agents_list[0].n_mod
+            action_dim_per_agent = 2 * B_agent + 1 + B_agent * n_mod
+
             noisy_parts = []
             for i in range(self.n_agents):
-                offs = i * action_dim_per_agent
+                offs = i * action_dim_per_agent               
                 mask = target_actions[:, offs : offs + B_agent]
-                power = target_actions[:, offs + B_agent : offs + 2*B_agent]
-                cr = target_actions[:, offs + 2*B_agent : offs + 2*B_agent + 1]
-                mod_logits = target_actions[:, offs + 2*B_agent + 1 : offs + action_dim_per_agent]
+                power = target_actions[:, offs + B_agent : offs + 2 * B_agent]
+                cr = target_actions[:, offs + 2 * B_agent : offs + 2 * B_agent + 1]
+                mod_flat = target_actions[:, offs + 2 * B_agent + 1 : offs + action_dim_per_agent]
+                mod_logits = mod_flat.view(-1, B_agent, n_mod)
                 mask_noisy = T.clamp(mask + T.randn_like(mask) * 0.02, 0.0, 1.0)
                 power_noisy = T.clamp(power + T.randn_like(power) * 0.1, min=0.0)
-                cr_noisy = T.clamp(
-                    cr + T.randn_like(cr) * 0.02,
-                    self.cfg.CR_min,
-                    self.cfg.CR_max
-                )
+                cr_noisy = T.clamp(cr + T.randn_like(cr) * 0.02, self.cfg.CR_min, self.cfg.CR_max)
                 mod_noisy = mod_logits + T.randn_like(mod_logits) * 0.05
+                mod_noisy = mod_noisy.view(-1, B_agent * n_mod)
                 noisy_parts.append(T.cat(
                    [mask_noisy, power_noisy, cr_noisy, mod_noisy],
                    dim=1
@@ -121,6 +126,10 @@ class GlobalController:
         # -------------------------------------------------------
         # Current Q
         # -------------------------------------------------------
+        self.critic1.train()
+        self.critic2.train()
+
+
         q1 = self.critic1(states, actions)
         q2 = self.critic2(states, actions)
 
